@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_fichaje_list" model="ir.ui.view">
+        <field name="name">fichaje.asistencia.list</field>
+        <field name="model">fichaje.asistencia</field>
+        <field name="arch" type="xml">
+            <list string="Presencia - Gonzalo">
+                <field name="employee_id"/>
+                <field name="fecha_fichaje"/>
+                <field name="tipo_accion"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_fichaje_form" model="ir.ui.view">
+        <field name="name">fichaje.asistencia.form</field>
+        <field name="model">fichaje.asistencia</field>
+        <field name="arch" type="xml">
+            <form string="Registro de Fichaje">
+                <sheet>
+                    <group>
+                        <field name="employee_id" readonly="1"/>
+                        <field name="fecha_fichaje"/>
+                        <field name="tipo_accion"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_fichaje" model="ir.actions.act_window">
+        <field name="name">Presencia - Gonzalo</field>
+        <field name="res_model">fichaje.asistencia</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_fichaje_root" name="Presencia - Gonzalo" sequence="10"/>
+    <menuitem id="menu_fichaje_main" name="Registros" parent="menu_fichaje_root" action="action_fichaje"/>
+</odoo>
