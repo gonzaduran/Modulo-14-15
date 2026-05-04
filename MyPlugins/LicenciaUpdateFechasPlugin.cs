@@ -14,13 +14,13 @@ namespace MyPlugins
     ///   Entidad         : dtt_licencia
     ///   Fase            : Pre-Operation (o Pre-Validation)
     ///   Modo            : Síncrono
-    ///   Filtering Attr. : dtt_fechainicio, dtt_fechafin
-    ///   Pre-Image       : Nombre = "PreImage", Atributos = dtt_fechainicio, dtt_fechafin
+    ///   Filtering Attr. : dtt_FechaInicio, dtt_FechaFin
+    ///   Pre-Image       : Nombre = "PreImage", Atributos = dtt_FechaInicio, dtt_FechaFin
     /// </summary>
     public class LicenciaUpdateFechasPlugin : IPlugin
     {
-        private const string AttrFechaInicio = "dtt_fechainicio";
-        private const string AttrFechaFin = "dtt_fechafin";
+        private const string AttrFechaInicio = "dtt_FechaInicio";
+        private const string AttrFechaFin = "dtt_FechaFin";
         private const string PreImageAlias = "PreImage";
         private const int MaxYears = 5;
 
@@ -90,7 +90,6 @@ namespace MyPlugins
             }
             catch (InvalidPluginExecutionException)
             {
-                // Relanzar sin envolver para que Dynamics muestre el mensaje al usuario
                 throw;
             }
             catch (FaultException<OrganizationServiceFault> ex)

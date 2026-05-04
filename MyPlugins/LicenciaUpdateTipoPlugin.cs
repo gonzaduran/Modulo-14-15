@@ -1,5 +1,9 @@
 using System;
+using System.Linq;
 using Microsoft.Xrm.Sdk;
+using Microsoft.Xrm.Sdk.Query;
+using Microsoft.Xrm.Sdk.Messages;
+using Microsoft.Xrm.Sdk.Metadata;
 using System.ServiceModel;
 
 namespace MyPlugins
@@ -13,15 +17,15 @@ namespace MyPlugins
     ///   Entidad         : dtt_licencia
     ///   Fase            : Pre-Operation
     ///   Modo            : Síncrono
-    ///   Filtering Attr. : dtt_tipo
-    ///   Pre-Image       : Nombre = "PreImage", Atributos = dtt_contact, dtt_tipo
+    ///   Filtering Attr. : dtt_Tipo
+    ///   Pre-Image       : Nombre = "PreImage", Atributos = dtt_Contact, dtt_Tipo
     /// </summary>
     public class LicenciaUpdateTipoPlugin : IPlugin
     {
         private const string EntityName = "dtt_licencia";
-        private const string AttrNombre = "dtt_nombre";
-        private const string AttrTipo = "dtt_tipo";
-        private const string AttrContact = "dtt_contact";
+        private const string AttrNombre = "dtt_Nombre";
+        private const string AttrTipo = "dtt_Tipo";
+        private const string AttrContact = "dtt_Contact";
         private const string PreImageAlias = "PreImage";
 
         public void Execute(IServiceProvider serviceProvider)
@@ -78,9 +82,12 @@ namespace MyPlugins
                     return;
                 }
 
+                // Obtener nombre del contacto y etiqueta del tipo
+                string contactName = GetContactName(service, contactRef);
+                string tipoLabel = GetOptionSetLabel(service, tipoValue.Value);
+
                 // Recalcular el nombre
-                target[AttrNombre] = PluginHelper.BuildLicenciaName(
-                    service, contactRef, tipoValue, EntityName, AttrTipo);
+                target[AttrNombre] = $"{contactName} - {tipoLabel}";
 
                 tracing.Trace("LicenciaUpdateTipoPlugin: nombre actualizado correctamente.");
             }
@@ -94,6 +101,32 @@ namespace MyPlugins
                 tracing.Trace("LicenciaUpdateTipoPlugin: {0}", ex.ToString());
                 throw;
             }
+        }
+
+        private string GetContactName(IOrganizationService service, EntityReference contactRef)
+        {
+            Entity contact = service.Retrieve(
+                "contact", contactRef.Id, new ColumnSet("fullname"));
+            return contact.GetAttributeValue<string>("fullname") ?? "Sin contacto";
+        }
+
+        private string GetOptionSetLabel(IOrganizationService service, int optionValue)
+        {
+            var request = new RetrieveAttributeRequest
+            {
+                EntityLogicalName = EntityName,
+                LogicalName = AttrTipo,
+                RetrieveAsIfPublished = true
+            };
+
+            var response = (RetrieveAttributeResponse)service.Execute(request);
+            var metadata = (PicklistAttributeMetadata)response.AttributeMetadata;
+
+            var option = metadata.OptionSet.Options
+                .FirstOrDefault(o => o.Value == optionValue);
+
+            return option?.Label?.UserLocalizedLabel?.Label
+                   ?? optionValue.ToString();
         }
     }
 }

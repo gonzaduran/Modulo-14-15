@@ -14,10 +14,10 @@ namespace MyPlugins
     ///   Entidad         : dtt_licencia
     ///   Fase            : Post-Operation
     ///   Modo            : Asíncrono
-    ///   Pre-Image       : Nombre = "PreImage", Atributos = dtt_contact
+    ///   Pre-Image       : Nombre = "PreImage", Atributos = dtt_Contact
     ///
     /// Notas:
-    ///   - Se usa Pre-Image porque en un Update el campo dtt_contact podría
+    ///   - Se usa Pre-Image porque en un Update el campo dtt_Contact podría
     ///     no estar incluido en los campos actualizados (Target).
     ///   - Si el contacto cambia (está en Target y en PreImage con valor distinto),
     ///     se recalculan ambos contactos (el anterior y el nuevo).
@@ -25,7 +25,7 @@ namespace MyPlugins
     public class ContactLicenciasCountPlugin : IPlugin
     {
         private const string EntityName = "dtt_licencia";
-        private const string AttrContact = "dtt_contact";
+        private const string AttrContact = "dtt_Contact";
         private const string AttrNumLicencias = "dtt_numerolicencias";
         private const string PreImageAlias = "PreImage";
 
@@ -69,7 +69,7 @@ namespace MyPlugins
                 if (contactRef == null)
                 {
                     contactRef = previousContactRef;
-                    previousContactRef = null; // No hay cambio de contacto
+                    previousContactRef = null;
                 }
 
                 // Actualizar el contacto actual
@@ -102,22 +102,32 @@ namespace MyPlugins
         }
 
         /// <summary>
-        /// Cuenta todas las licencias asociadas a un contacto.
+        /// Cuenta todas las licencias asociadas a un contacto usando FetchXML aggregate.
         /// </summary>
         private int CountLicencias(
             IOrganizationService service,
             Guid contactId,
             ITracingService tracing)
         {
-            var query = new QueryExpression(EntityName)
+            string fetchXml = string.Format(
+                @"<fetch aggregate='true'>
+                    <entity name='{0}'>
+                        <attribute name='{1}' aggregate='count' alias='liccount'/>
+                        <filter>
+                            <condition attribute='{1}' operator='eq' value='{2}'/>
+                        </filter>
+                    </entity>
+                </fetch>",
+                EntityName, AttrContact, contactId);
+
+            EntityCollection results = service.RetrieveMultiple(new FetchExpression(fetchXml));
+
+            int count = 0;
+            if (results.Entities.Count > 0 && results.Entities[0].Contains("liccount"))
             {
-                ColumnSet = new ColumnSet(false) // No necesitamos columnas, solo contar
-            };
-
-            query.Criteria.AddCondition(AttrContact, ConditionOperator.Equal, contactId);
-
-            EntityCollection results = service.RetrieveMultiple(query);
-            int count = results.Entities.Count;
+                var aliasedValue = (AliasedValue)results.Entities[0]["liccount"];
+                count = (int)aliasedValue.Value;
+            }
 
             tracing.Trace("ContactLicenciasCountPlugin: contacto {0} tiene {1} licencia(s).",
                 contactId, count);
