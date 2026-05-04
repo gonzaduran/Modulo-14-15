@@ -43,19 +43,29 @@ namespace MyPlugins
                     if (!entity.Contains("dtt_FechaInicio") && !entity.Contains("dtt_FechaFin"))
                         return;
 
-                    // Obtener Pre-Image para los valores que no estén en el Target
+                    // Obtener Pre-Image o recuperar el registro completo para las fechas
+                    // que no estén en el Target
                     Entity preImage = null;
                     if (context.PreEntityImages.Contains("PreImage"))
                     {
                         preImage = context.PreEntityImages["PreImage"];
                     }
 
-                    // Fecha Inicio: primero del Target, si no de la Pre-Image
+                    // Si no hay Pre-Image y falta alguna fecha en el Target,
+                    // recuperamos el registro directamente desde CRM
+                    if (preImage == null &&
+                        (!entity.Contains("dtt_FechaInicio") || !entity.Contains("dtt_FechaFin")))
+                    {
+                        preImage = service.Retrieve("dtt_licencia", entity.Id,
+                            new Microsoft.Xrm.Sdk.Query.ColumnSet("dtt_FechaInicio", "dtt_FechaFin"));
+                    }
+
+                    // Fecha Inicio: primero del Target, si no de la Pre-Image/Retrieve
                     DateTime? fechaInicio = entity.Contains("dtt_FechaInicio")
                         ? entity.GetAttributeValue<DateTime?>("dtt_FechaInicio")
                         : (preImage != null ? preImage.GetAttributeValue<DateTime?>("dtt_FechaInicio") : null);
 
-                    // Fecha Fin: primero del Target, si no de la Pre-Image
+                    // Fecha Fin: primero del Target, si no de la Pre-Image/Retrieve
                     DateTime? fechaFin = entity.Contains("dtt_FechaFin")
                         ? entity.GetAttributeValue<DateTime?>("dtt_FechaFin")
                         : (preImage != null ? preImage.GetAttributeValue<DateTime?>("dtt_FechaFin") : null);

@@ -43,11 +43,31 @@ namespace MyPlugins
                     if (!entity.Contains("dtt_Tipo"))
                         return;
 
-                    // Obtener el texto del nuevo Tipo desde FormattedValues
-                    if (!entity.FormattedValues.Contains("dtt_Tipo"))
+                    // Obtener el valor numérico del nuevo Tipo (OptionSetValue)
+                    var tipoValue = entity.GetAttributeValue<OptionSetValue>("dtt_Tipo");
+                    if (tipoValue == null)
                         return;
 
-                    string tipoTexto = entity.FormattedValues["dtt_Tipo"];
+                    // Obtener la etiqueta del OptionSet desde los metadatos
+                    // (FormattedValues NO se rellena en Pre-Operation Update)
+                    var retrieveAttrRequest = new Microsoft.Xrm.Sdk.Messages.RetrieveAttributeRequest
+                    {
+                        EntityLogicalName = "dtt_licencia",
+                        LogicalName = "dtt_Tipo",
+                        RetrieveAsIfPublished = true
+                    };
+                    var retrieveAttrResponse = (Microsoft.Xrm.Sdk.Messages.RetrieveAttributeResponse)
+                        service.Execute(retrieveAttrRequest);
+                    var picklistMetadata = (Microsoft.Xrm.Sdk.Metadata.PicklistAttributeMetadata)
+                        retrieveAttrResponse.AttributeMetadata;
+
+                    string tipoTexto = tipoValue.Value.ToString();
+                    var option = picklistMetadata.OptionSet.Options
+                        .FirstOrDefault(o => o.Value == tipoValue.Value);
+                    if (option != null && option.Label != null && option.Label.UserLocalizedLabel != null)
+                    {
+                        tipoTexto = option.Label.UserLocalizedLabel.Label;
+                    }
 
                     // Obtener el Contacto: primero del Target, si no de la Pre-Image
                     var contactRef = entity.GetAttributeValue<EntityReference>("dtt_Contact");
