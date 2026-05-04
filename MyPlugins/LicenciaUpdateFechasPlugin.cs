@@ -1,106 +1,94 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 using Microsoft.Xrm.Sdk;
 using System.ServiceModel;
 
 namespace MyPlugins
 {
-    /// <summary>
-    /// Plugin que se ejecuta en el UPDATE de una Licencia (Pre-Operation).
-    /// Valida que la diferencia entre Fecha Fin y Fecha Inicio no supere 5 años.
-    /// Si la supera, interrumpe el guardado lanzando una excepción.
-    ///
-    /// Registro del plugin:
-    ///   Mensaje         : Update
-    ///   Entidad         : dtt_licencia
-    ///   Fase            : Pre-Operation (o Pre-Validation)
-    ///   Modo            : Síncrono
-    ///   Filtering Attr. : dtt_FechaInicio, dtt_FechaFin
-    ///   Pre-Image       : Nombre = "PreImage", Atributos = dtt_FechaInicio, dtt_FechaFin
-    /// </summary>
     public class LicenciaUpdateFechasPlugin : IPlugin
     {
-        private const string AttrFechaInicio = "dtt_FechaInicio";
-        private const string AttrFechaFin = "dtt_FechaFin";
-        private const string PreImageAlias = "PreImage";
-        private const int MaxYears = 5;
-
         public void Execute(IServiceProvider serviceProvider)
         {
-            ITracingService tracing =
+            // Extract the tracing service for use in debugging sandboxed plug-ins.  
+            // If you are not registering the plug-in in the sandbox, then you do  
+            // not have to add any tracing service related code.  
+            ITracingService tracingService =
                 (ITracingService)serviceProvider.GetService(typeof(ITracingService));
 
-            IPluginExecutionContext context =
-                (IPluginExecutionContext)serviceProvider.GetService(typeof(IPluginExecutionContext));
+            // Obtain the execution context from the service provider.  
+            IPluginExecutionContext context = (IPluginExecutionContext)
+                serviceProvider.GetService(typeof(IPluginExecutionContext));
+          
+            // Obtain the organization service reference which you will need for  
+            // web service calls.  
+            IOrganizationServiceFactory serviceFactory =
+                (IOrganizationServiceFactory)serviceProvider.GetService(typeof(IOrganizationServiceFactory));
+            IOrganizationService service = serviceFactory.CreateOrganizationService(context.UserId);
 
-            if (context.MessageName != "Update")
-                return;
 
-            if (!context.InputParameters.Contains("Target") ||
-                !(context.InputParameters["Target"] is Entity))
-                return;
 
-            Entity target = (Entity)context.InputParameters["Target"];
-
-            // Solo validar si se está modificando alguna de las fechas
-            if (!target.Contains(AttrFechaInicio) && !target.Contains(AttrFechaFin))
-                return;
-
-            try
+            // The InputParameters collection contains all the data passed in the message request.  
+            if (context.InputParameters.Contains("Target") &&
+                context.InputParameters["Target"] is Entity)
             {
-                tracing.Trace("LicenciaUpdateFechasPlugin: inicio de ejecución.");
+                // Obtain the target entity from the input parameters.  
+                Entity entity = (Entity)context.InputParameters["Target"];
 
-                // Obtener Pre-Image para los valores que no estén en el Target
-                Entity preImage = null;
-                if (context.PreEntityImages.Contains(PreImageAlias))
+                try
                 {
-                    preImage = context.PreEntityImages[PreImageAlias];
+                    // Solo validar si se está modificando alguna de las fechas
+                    if (!entity.Contains("dtt_FechaInicio") && !entity.Contains("dtt_FechaFin"))
+                        return;
+
+                    // Obtener Pre-Image para los valores que no estén en el Target
+                    Entity preImage = null;
+                    if (context.PreEntityImages.Contains("PreImage"))
+                    {
+                        preImage = context.PreEntityImages["PreImage"];
+                    }
+
+                    // Fecha Inicio: primero del Target, si no de la Pre-Image
+                    DateTime? fechaInicio = entity.Contains("dtt_FechaInicio")
+                        ? entity.GetAttributeValue<DateTime?>("dtt_FechaInicio")
+                        : (preImage != null ? preImage.GetAttributeValue<DateTime?>("dtt_FechaInicio") : null);
+
+                    // Fecha Fin: primero del Target, si no de la Pre-Image
+                    DateTime? fechaFin = entity.Contains("dtt_FechaFin")
+                        ? entity.GetAttributeValue<DateTime?>("dtt_FechaFin")
+                        : (preImage != null ? preImage.GetAttributeValue<DateTime?>("dtt_FechaFin") : null);
+
+                    if (!fechaInicio.HasValue || !fechaFin.HasValue)
+                        return;
+
+                    // Calcular diferencia en años
+                    double diffYears = (fechaFin.Value - fechaInicio.Value).TotalDays / 365.25;
+
+                    if (diffYears > 5)
+                    {
+                        throw new InvalidPluginExecutionException(
+                            "Error: La diferencia entre Fecha Inicio y Fecha Fin no puede superar los 5 años. " +
+                            "Diferencia actual: " + diffYears.ToString("F1") + " años.");
+                    }
                 }
 
-                // Fecha Inicio: primero del Target, si no de la Pre-Image
-                DateTime? fechaInicio = target.Contains(AttrFechaInicio)
-                    ? target.GetAttributeValue<DateTime?>(AttrFechaInicio)
-                    : preImage?.GetAttributeValue<DateTime?>(AttrFechaInicio);
-
-                // Fecha Fin: primero del Target, si no de la Pre-Image
-                DateTime? fechaFin = target.Contains(AttrFechaFin)
-                    ? target.GetAttributeValue<DateTime?>(AttrFechaFin)
-                    : preImage?.GetAttributeValue<DateTime?>(AttrFechaFin);
-
-                if (!fechaInicio.HasValue || !fechaFin.HasValue)
+                catch (InvalidPluginExecutionException)
                 {
-                    tracing.Trace("LicenciaUpdateFechasPlugin: alguna fecha es null, se omite la validación.");
-                    return;
+                    throw;
                 }
 
-                // Calcular diferencia en años
-                double diffYears = (fechaFin.Value - fechaInicio.Value).TotalDays / 365.25;
-
-                tracing.Trace(
-                    "LicenciaUpdateFechasPlugin: Inicio={0}, Fin={1}, Diferencia={2:F2} años.",
-                    fechaInicio.Value, fechaFin.Value, diffYears);
-
-                if (diffYears > MaxYears)
+                catch (FaultException<OrganizationServiceFault> ex)
                 {
-                    throw new InvalidPluginExecutionException(
-                        $"Error: La diferencia entre Fecha Inicio y Fecha Fin no puede superar los {MaxYears} años. " +
-                        $"Diferencia actual: {diffYears:F1} años.");
+                    throw new InvalidPluginExecutionException("An error occurred in MyPlug-in.", ex);
                 }
 
-                tracing.Trace("LicenciaUpdateFechasPlugin: validación superada.");
-            }
-            catch (InvalidPluginExecutionException)
-            {
-                throw;
-            }
-            catch (FaultException<OrganizationServiceFault> ex)
-            {
-                throw new InvalidPluginExecutionException(
-                    "Error en LicenciaUpdateFechasPlugin: " + ex.Message, ex);
-            }
-            catch (Exception ex)
-            {
-                tracing.Trace("LicenciaUpdateFechasPlugin: {0}", ex.ToString());
-                throw;
+                catch (Exception ex)
+                {
+                    tracingService.Trace("MyPlugin: {0}", ex.ToString());
+                    throw;
+                }
             }
         }
     }

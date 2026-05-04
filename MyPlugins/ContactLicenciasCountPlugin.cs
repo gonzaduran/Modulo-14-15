@@ -1,126 +1,111 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 using Microsoft.Xrm.Sdk;
-using Microsoft.Xrm.Sdk.Query;
 using System.ServiceModel;
 
 namespace MyPlugins
 {
-    /// <summary>
-    /// Plugin que calcula el número de licencias asociadas a un contacto
-    /// y actualiza el campo dtt_numerolicencias en el contacto.
-    ///
-    /// Registro del plugin:
-    ///   Mensaje         : Create y Update
-    ///   Entidad         : dtt_licencia
-    ///   Fase            : Post-Operation
-    ///   Modo            : Asíncrono
-    ///   Pre-Image       : Nombre = "PreImage", Atributos = dtt_Contact
-    ///
-    /// Notas:
-    ///   - Se usa Pre-Image porque en un Update el campo dtt_Contact podría
-    ///     no estar incluido en los campos actualizados (Target).
-    ///   - Si el contacto cambia (está en Target y en PreImage con valor distinto),
-    ///     se recalculan ambos contactos (el anterior y el nuevo).
-    /// </summary>
     public class ContactLicenciasCountPlugin : IPlugin
     {
-        private const string EntityName = "dtt_licencia";
-        private const string AttrContact = "dtt_Contact";
-        private const string AttrNumLicencias = "dtt_numerolicencias";
-        private const string PreImageAlias = "PreImage";
-
         public void Execute(IServiceProvider serviceProvider)
         {
-            ITracingService tracing =
+            // Extract the tracing service for use in debugging sandboxed plug-ins.  
+            // If you are not registering the plug-in in the sandbox, then you do  
+            // not have to add any tracing service related code.  
+            ITracingService tracingService =
                 (ITracingService)serviceProvider.GetService(typeof(ITracingService));
 
-            IPluginExecutionContext context =
-                (IPluginExecutionContext)serviceProvider.GetService(typeof(IPluginExecutionContext));
-
-            if (context.MessageName != "Create" && context.MessageName != "Update")
-                return;
-
-            if (!context.InputParameters.Contains("Target") ||
-                !(context.InputParameters["Target"] is Entity))
-                return;
-
-            Entity target = (Entity)context.InputParameters["Target"];
-
-            IOrganizationServiceFactory factory =
+            // Obtain the execution context from the service provider.  
+            IPluginExecutionContext context = (IPluginExecutionContext)
+                serviceProvider.GetService(typeof(IPluginExecutionContext));
+          
+            // Obtain the organization service reference which you will need for  
+            // web service calls.  
+            IOrganizationServiceFactory serviceFactory =
                 (IOrganizationServiceFactory)serviceProvider.GetService(typeof(IOrganizationServiceFactory));
-            IOrganizationService service = factory.CreateOrganizationService(context.UserId);
+            IOrganizationService service = serviceFactory.CreateOrganizationService(context.UserId);
 
-            try
+
+
+            // The InputParameters collection contains all the data passed in the message request.  
+            if (context.InputParameters.Contains("Target") &&
+                context.InputParameters["Target"] is Entity)
             {
-                tracing.Trace("ContactLicenciasCountPlugin: inicio de ejecución ({0}).",
-                    context.MessageName);
+                // Obtain the target entity from the input parameters.  
+                Entity entity = (Entity)context.InputParameters["Target"];
 
-                // Obtener el contacto actual (del Target o de la Pre-Image)
-                var contactRef = target.GetAttributeValue<EntityReference>(AttrContact);
-                EntityReference previousContactRef = null;
-
-                if (context.PreEntityImages.Contains(PreImageAlias))
+                try
                 {
-                    Entity preImage = context.PreEntityImages[PreImageAlias];
-                    previousContactRef = preImage.GetAttributeValue<EntityReference>(AttrContact);
+                    // Obtener el contacto actual (del Target o de la Pre-Image)
+                    var contactRef = entity.GetAttributeValue<EntityReference>("dtt_Contact");
+                    EntityReference previousContactRef = null;
+
+                    if (context.PreEntityImages.Contains("PreImage"))
+                    {
+                        Entity preImage = context.PreEntityImages["PreImage"];
+                        previousContactRef = preImage.GetAttributeValue<EntityReference>("dtt_Contact");
+                    }
+
+                    // Si no hay contacto en el Target, usar el de la Pre-Image
+                    if (contactRef == null)
+                    {
+                        contactRef = previousContactRef;
+                        previousContactRef = null;
+                    }
+
+                    // Actualizar el contacto actual
+                    if (contactRef != null)
+                    {
+                        int count = CountLicencias(service, contactRef.Id);
+                        Entity contactUpdate = new Entity("contact", contactRef.Id);
+                        contactUpdate["dtt_numerolicencias"] = count;
+                        service.Update(contactUpdate);
+                    }
+
+                    // Si el contacto cambió, actualizar también el contacto anterior
+                    if (previousContactRef != null &&
+                        (contactRef == null || previousContactRef.Id != contactRef.Id))
+                    {
+                        int countPrev = CountLicencias(service, previousContactRef.Id);
+                        Entity contactUpdate = new Entity("contact", previousContactRef.Id);
+                        contactUpdate["dtt_numerolicencias"] = countPrev;
+                        service.Update(contactUpdate);
+                    }
                 }
 
-                // Si no hay contacto en el Target, usar el de la Pre-Image
-                if (contactRef == null)
+                catch (FaultException<OrganizationServiceFault> ex)
                 {
-                    contactRef = previousContactRef;
-                    previousContactRef = null;
+                    throw new InvalidPluginExecutionException("An error occurred in MyPlug-in.", ex);
                 }
 
-                // Actualizar el contacto actual
-                if (contactRef != null)
+                catch (Exception ex)
                 {
-                    int count = CountLicencias(service, contactRef.Id, tracing);
-                    UpdateContactCount(service, contactRef.Id, count, tracing);
+                    tracingService.Trace("MyPlugin: {0}", ex.ToString());
+                    throw;
                 }
-
-                // Si el contacto cambió, actualizar también el contacto anterior
-                if (previousContactRef != null &&
-                    (contactRef == null || previousContactRef.Id != contactRef.Id))
-                {
-                    int count = CountLicencias(service, previousContactRef.Id, tracing);
-                    UpdateContactCount(service, previousContactRef.Id, count, tracing);
-                }
-
-                tracing.Trace("ContactLicenciasCountPlugin: ejecución completada.");
-            }
-            catch (FaultException<OrganizationServiceFault> ex)
-            {
-                throw new InvalidPluginExecutionException(
-                    "Error en ContactLicenciasCountPlugin: " + ex.Message, ex);
-            }
-            catch (Exception ex)
-            {
-                tracing.Trace("ContactLicenciasCountPlugin: {0}", ex.ToString());
-                throw;
             }
         }
 
         /// <summary>
-        /// Cuenta todas las licencias asociadas a un contacto usando FetchXML aggregate.
+        /// Cuenta las licencias de un contacto usando FetchXML aggregate.
         /// </summary>
-        private int CountLicencias(
-            IOrganizationService service,
-            Guid contactId,
-            ITracingService tracing)
+        private int CountLicencias(IOrganizationService service, Guid contactId)
         {
-            string fetchXml = string.Format(
-                @"<fetch aggregate='true'>
-                    <entity name='{0}'>
-                        <attribute name='{1}' aggregate='count' alias='liccount'/>
-                        <filter>
-                            <condition attribute='{1}' operator='eq' value='{2}'/>
-                        </filter>
-                    </entity>
-                </fetch>",
-                EntityName, AttrContact, contactId);
+            string fetchXml =
+                "<fetch aggregate='true'>" +
+                "  <entity name='dtt_licencia'>" +
+                "    <attribute name='dtt_Contact' aggregate='count' alias='liccount'/>" +
+                "    <filter>" +
+                "      <condition attribute='dtt_Contact' operator='eq' value='" + contactId.ToString() + "'/>" +
+                "    </filter>" +
+                "  </entity>" +
+                "</fetch>";
 
-            EntityCollection results = service.RetrieveMultiple(new FetchExpression(fetchXml));
+            EntityCollection results = service.RetrieveMultiple(
+                new Microsoft.Xrm.Sdk.Query.FetchExpression(fetchXml));
 
             int count = 0;
             if (results.Entities.Count > 0 && results.Entities[0].Contains("liccount"))
@@ -129,27 +114,7 @@ namespace MyPlugins
                 count = (int)aliasedValue.Value;
             }
 
-            tracing.Trace("ContactLicenciasCountPlugin: contacto {0} tiene {1} licencia(s).",
-                contactId, count);
-
             return count;
-        }
-
-        /// <summary>
-        /// Actualiza el campo Número de Licencias en el contacto.
-        /// </summary>
-        private void UpdateContactCount(
-            IOrganizationService service,
-            Guid contactId,
-            int count,
-            ITracingService tracing)
-        {
-            Entity contactUpdate = new Entity("contact", contactId);
-            contactUpdate[AttrNumLicencias] = count;
-            service.Update(contactUpdate);
-
-            tracing.Trace("ContactLicenciasCountPlugin: contacto {0} actualizado con {1} licencia(s).",
-                contactId, count);
         }
     }
 }

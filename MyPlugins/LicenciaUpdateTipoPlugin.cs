@@ -1,132 +1,90 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 using Microsoft.Xrm.Sdk;
-using Microsoft.Xrm.Sdk.Query;
-using Microsoft.Xrm.Sdk.Messages;
-using Microsoft.Xrm.Sdk.Metadata;
 using System.ServiceModel;
 
 namespace MyPlugins
 {
-    /// <summary>
-    /// Plugin que se ejecuta en la MODIFICACIÓN de una Licencia (Pre-Operation)
-    /// cuando se cambia el campo Tipo. Recalcula el Nombre.
-    ///
-    /// Registro del plugin:
-    ///   Mensaje         : Update
-    ///   Entidad         : dtt_licencia
-    ///   Fase            : Pre-Operation
-    ///   Modo            : Síncrono
-    ///   Filtering Attr. : dtt_Tipo
-    ///   Pre-Image       : Nombre = "PreImage", Atributos = dtt_Contact, dtt_Tipo
-    /// </summary>
     public class LicenciaUpdateTipoPlugin : IPlugin
     {
-        private const string EntityName = "dtt_licencia";
-        private const string AttrNombre = "dtt_Nombre";
-        private const string AttrTipo = "dtt_Tipo";
-        private const string AttrContact = "dtt_Contact";
-        private const string PreImageAlias = "PreImage";
-
         public void Execute(IServiceProvider serviceProvider)
         {
-            ITracingService tracing =
+            // Extract the tracing service for use in debugging sandboxed plug-ins.  
+            // If you are not registering the plug-in in the sandbox, then you do  
+            // not have to add any tracing service related code.  
+            ITracingService tracingService =
                 (ITracingService)serviceProvider.GetService(typeof(ITracingService));
 
-            IPluginExecutionContext context =
-                (IPluginExecutionContext)serviceProvider.GetService(typeof(IPluginExecutionContext));
-
-            if (context.MessageName != "Update")
-                return;
-
-            if (!context.InputParameters.Contains("Target") ||
-                !(context.InputParameters["Target"] is Entity))
-                return;
-
-            Entity target = (Entity)context.InputParameters["Target"];
-
-            // Solo actuar si se está modificando el campo Tipo
-            if (!target.Contains(AttrTipo))
-                return;
-
-            IOrganizationServiceFactory factory =
+            // Obtain the execution context from the service provider.  
+            IPluginExecutionContext context = (IPluginExecutionContext)
+                serviceProvider.GetService(typeof(IPluginExecutionContext));
+          
+            // Obtain the organization service reference which you will need for  
+            // web service calls.  
+            IOrganizationServiceFactory serviceFactory =
                 (IOrganizationServiceFactory)serviceProvider.GetService(typeof(IOrganizationServiceFactory));
-            IOrganizationService service = factory.CreateOrganizationService(context.UserId);
+            IOrganizationService service = serviceFactory.CreateOrganizationService(context.UserId);
 
-            try
+
+
+            // The InputParameters collection contains all the data passed in the message request.  
+            if (context.InputParameters.Contains("Target") &&
+                context.InputParameters["Target"] is Entity)
             {
-                tracing.Trace("LicenciaUpdateTipoPlugin: inicio de ejecución.");
+                // Obtain the target entity from the input parameters.  
+                Entity entity = (Entity)context.InputParameters["Target"];
 
-                // Obtener el nuevo valor de Tipo desde el Target
-                var tipoValue = target.GetAttributeValue<OptionSetValue>(AttrTipo);
-                if (tipoValue == null)
+                try
                 {
-                    tracing.Trace("LicenciaUpdateTipoPlugin: tipo es null, se omite.");
-                    return;
+                    // Solo actuar si se está modificando el campo Tipo
+                    if (!entity.Contains("dtt_Tipo"))
+                        return;
+
+                    // Obtener el texto del nuevo Tipo desde FormattedValues
+                    if (!entity.FormattedValues.Contains("dtt_Tipo"))
+                        return;
+
+                    string tipoTexto = entity.FormattedValues["dtt_Tipo"];
+
+                    // Obtener el Contacto: primero del Target, si no de la Pre-Image
+                    var contactRef = entity.GetAttributeValue<EntityReference>("dtt_Contact");
+
+                    if (contactRef == null && context.PreEntityImages.Contains("PreImage"))
+                    {
+                        Entity preImage = context.PreEntityImages["PreImage"];
+                        contactRef = preImage.GetAttributeValue<EntityReference>("dtt_Contact");
+                    }
+
+                    if (contactRef == null)
+                        return;
+
+                    // Obtener el nombre del contacto
+                    string contactName = contactRef.Name;
+                    if (string.IsNullOrEmpty(contactName))
+                    {
+                        Entity contact = service.Retrieve("contact", contactRef.Id,
+                            new Microsoft.Xrm.Sdk.Query.ColumnSet("fullname"));
+                        contactName = contact.GetAttributeValue<string>("fullname") ?? "Sin contacto";
+                    }
+
+                    // Recalcular el nombre
+                    entity["dtt_Nombre"] = contactName + " - " + tipoTexto;
                 }
 
-                // Obtener el Contacto.
-                // Primero intentar desde el Target; si no está, usar la Pre-Image.
-                var contactRef = target.GetAttributeValue<EntityReference>(AttrContact);
-
-                if (contactRef == null &&
-                    context.PreEntityImages.Contains(PreImageAlias))
+                catch (FaultException<OrganizationServiceFault> ex)
                 {
-                    Entity preImage = context.PreEntityImages[PreImageAlias];
-                    contactRef = preImage.GetAttributeValue<EntityReference>(AttrContact);
+                    throw new InvalidPluginExecutionException("An error occurred in MyPlug-in.", ex);
                 }
 
-                if (contactRef == null)
+                catch (Exception ex)
                 {
-                    tracing.Trace("LicenciaUpdateTipoPlugin: no se encontró contacto.");
-                    return;
+                    tracingService.Trace("MyPlugin: {0}", ex.ToString());
+                    throw;
                 }
-
-                // Obtener nombre del contacto y etiqueta del tipo
-                string contactName = GetContactName(service, contactRef);
-                string tipoLabel = GetOptionSetLabel(service, tipoValue.Value);
-
-                // Recalcular el nombre
-                target[AttrNombre] = $"{contactName} - {tipoLabel}";
-
-                tracing.Trace("LicenciaUpdateTipoPlugin: nombre actualizado correctamente.");
             }
-            catch (FaultException<OrganizationServiceFault> ex)
-            {
-                throw new InvalidPluginExecutionException(
-                    "Error en LicenciaUpdateTipoPlugin: " + ex.Message, ex);
-            }
-            catch (Exception ex)
-            {
-                tracing.Trace("LicenciaUpdateTipoPlugin: {0}", ex.ToString());
-                throw;
-            }
-        }
-
-        private string GetContactName(IOrganizationService service, EntityReference contactRef)
-        {
-            Entity contact = service.Retrieve(
-                "contact", contactRef.Id, new ColumnSet("fullname"));
-            return contact.GetAttributeValue<string>("fullname") ?? "Sin contacto";
-        }
-
-        private string GetOptionSetLabel(IOrganizationService service, int optionValue)
-        {
-            var request = new RetrieveAttributeRequest
-            {
-                EntityLogicalName = EntityName,
-                LogicalName = AttrTipo,
-                RetrieveAsIfPublished = true
-            };
-
-            var response = (RetrieveAttributeResponse)service.Execute(request);
-            var metadata = (PicklistAttributeMetadata)response.AttributeMetadata;
-
-            var option = metadata.OptionSet.Options
-                .FirstOrDefault(o => o.Value == optionValue);
-
-            return option?.Label?.UserLocalizedLabel?.Label
-                   ?? optionValue.ToString();
         }
     }
 }
